@@ -1,9 +1,3 @@
-import sys
-from PyQt5.QtWidgets import (QApplication, QMainWindow,QDesktopWidget,QLabel,
-                             QWidget,QGridLayout,QFileDialog,QPushButton,
-                             QFrame)
-from PyQt5.QtCore import Qt
-from PyQt5 import QtGui
 import torch
 import cv2
 import mediapipe as mp
@@ -15,162 +9,25 @@ from data_extractor import ball_state
 import matplotlib.patches as patches
 from io import BytesIO
 from PySide2.QtCore import QEventLoop
-from VideoProcessor import VideoProcessor
-class MainWindow(QMainWindow):
-    def __init__(self):
+from PyQt5.QtCore import QThread,pyqtSignal,QMutex,QWaitCondition
+
+class VideoProcessor(QThread):
+    pro_frame=pyqtSignal(object)
+    request_input=pyqtSignal(str)
+
+    def __init__(self,file_path):
         super().__init__()
-        self.setWindowTitle("AI BOWLER")
-        self.resize(1000,600)
-        self.align_center()
-        self.initUI()
-        #self.setWindowIcon(QIcon())
+        self.file_path=file_path
+        self.mutex=QMutex()
+        self.wait_condition=QWaitCondition()
+        self.isRunning_=True
+        self.recieved_inp=False
+        self.inp=False
 
-        
-    def initUI(self):
-
-        central_widget=QWidget()
-        self.setCentralWidget(central_widget)
-        self.label_mp=QLabel(self)
-        #container label
-        self.container_label1=QLabel(self)
-        self.container_label1.setFrameShape(QFrame.Shape.Box)
-        self.container_labelc1=QLabel(self)
-        #container child labels
-        self.browse_button=QPushButton("Browse",self)
-        self.browse_button.clicked.connect(self.file_picker)
-
-        self.rmf_button=QPushButton("x")
-        self.rmf_button.clicked.connect(self.reboot)
-
-        self.label_mp.setMinimumSize(500,300)
-        self.label_mp.setStyleSheet("background-color:black;")
-
-        self.file_label=QLabel("No file selected",self)
-
-        label_layout=QGridLayout()
-        label_layout_child=QGridLayout()
-        label_layout_child.addWidget(self.browse_button,0,0,1,1)
-        label_layout_child.addWidget(self.file_label,0,1,1,3,Qt.AlignCenter)
-        label_layout_child.addWidget(self.rmf_button,0,3,1,1,Qt.AlignRight)
-        self.rmf_button.hide()
-        self.container_labelc1.setLayout(label_layout_child)
-        
-        label_layout.addWidget(self.container_labelc1,0,0,1,1)
-        label_layout.addWidget(self.label_mp,2,0,6,1,Qt.AlignTop)
-        self.container_label1.setLayout(label_layout)
-        self.container_label1.setMinimumSize(530,400)
+    def run(self):
+        self.posture_ball_det(self.file_path)
 
 
-        #user input label
-        label_inp=QLabel(self)
-        self.yes_button=QPushButton("Yes")
-        self.no_button=QPushButton("No")
-        self.yes_button.clicked.connect(self.user_inp_yes)
-        self.no_button.clicked.connect(self.user_inp_no)
-        self.label_buttons=QLabel(self)
-        self.yes_button.hide()
-        self.no_button.hide()
-        #self.yes_button.clicked.connect()
-        label_inp.setFrameShape(QFrame.Shape.Box)
-        label_inp.setMinimumSize(530,150)
-        inp_button_grid=QGridLayout()
-        inp_button_grid.addWidget(self.yes_button,0,0,1,1,Qt.AlignCenter)
-        inp_button_grid.addWidget(self.no_button,0,1,1,1,Qt.AlignCenter)
-        self.label_buttons.setLayout(inp_button_grid)
-        self.ques_label=QLabel("Follow the instructions and answer few questions for the AI\nBrowse and select a training video for the Agent.",self)
-        inp_grid=QGridLayout()
-        inp_grid.addWidget(self.ques_label
-        ,0,0,1,1,Qt.AlignCenter)
-        inp_grid.addWidget(self.label_buttons,1,0,1,1)
-        label_inp.setLayout(inp_grid)
-
-
-        # The result part of the application
-        label_result=QLabel(self)
-        label_result.setMinimumSize(300,200)
-        label_result.setFrameShape(QFrame.Shape.Box)
-        self.result_line_label=QLabel(self)
-        self.result_len_label=QLabel(self)
-        self.result_speed_label=QLabel(self)
-
-
-        grid_res=QGridLayout()
-        grid_res.addWidget(QLabel("Bowl next delivery at:",self),0,0,1,2)
-        grid_res.addWidget(QLabel("Line : ",self),1,0,1,1,Qt.AlignLeft)
-        grid_res.addWidget(QLabel("Length : ",self),2,0,1,1,Qt.AlignLeft)
-        grid_res.addWidget(QLabel("Speed : ",self),3,0,1,1,Qt.AlignLeft)
-        grid_res.addWidget(self.result_line_label,1,1,1,1,Qt.AlignLeft)
-        grid_res.addWidget(self.result_len_label,2,1,1,1,Qt.AlignLeft)
-        grid_res.addWidget(self.result_speed_label,3,1,1,1,Qt.AlignLeft)
-        label_result.setLayout(grid_res)
-        
-    
-        grid_master=QGridLayout()
-        grid_master.addWidget(self.container_label1,0,0,2,1,Qt.AlignCenter)
-        grid_master.addWidget(label_inp,2,0,1,1,Qt.AlignCenter)
-        grid_master.addWidget(label_result,0,1,3,1,Qt.AlignCenter)
-
-        central_widget.setLayout(grid_master)
-
-    def align_center(self):
-        screen=QDesktopWidget().availableGeometry().center()
-        windowRect=self.frameGeometry()
-        windowRect.moveCenter(screen)
-        self.move(windowRect.topLeft())
-    
-    def file_picker(self):
-        
-        file_,_=QFileDialog.getOpenFileName(self,'select video File',"","All Files (*.mp4 *.avi *.mov)")
-        if file_:
-            self.file_label.setText(file_.split("/")[-1])
-            #self.cap=cv2.VideoCapture(file_)
-            self.browse_button.hide()
-            self.rmf_button.show()
-
-            #process the video
-            self.processor=VideoProcessor(file_) 
-            self.processor.pro_frame.connect(self.display_image)
-            self.processor.request_input.connect(self.show_input_buttons)
-            self.processor.start()
-
-            #feed it to the RL agent.
-
-            #render the output
-    def reboot(self):
-        self.browse_button.show()
-        self.rmf_button.hide()
-        self.file_label.setText("No file selected.")
-    def display_image(self,fig)->None:
-         buf=BytesIO()
-         fig.savefig(buf,format='png',bbox_inches="tight")
-         plt.close(fig)
-
-         qimage=QtGui.QImage()
-         qimage.loadFromData(buf.getvalue())
-         #converting it to pixel map
-         pixmap=QtGui.QPixmap.fromImage(qimage)
-         self.label_mp.setPixmap(pixmap)
-         self.label_mp.setScaledContents(True)
-         
-    #have to get d-map for each and every frame huh
-    def user_inp_yes(self):
-        self.user_inp=True
-        #self.loop.exit()
-        self.processor.user_response(True)
-        
-    def user_inp_no(self):
-        self.user_inp=False
-        #self.loop.exit()
-        self.processor.user_response(False)
-        
-    def await_event(self):
-        self.loop=QEventLoop()
-        self.loop.exec_()
-    def show_input_buttons(self,ques):
-         self.ques_label.setText(ques)
-         self.yes_button.show()
-         self.no_button.show()
-        
     def d_map_generator(self,frame,MiDaS,device):
         stump_detector=YOLO(r'E:\stump_detector.pt')
         #Detect the stump
@@ -188,16 +45,18 @@ class MainWindow(QMainWindow):
                         rect=patches.Rectangle((xyxy[0],xyxy[1]),xyxy[2]-xyxy[0],xyxy[3]-xyxy[1],linewidth=1,edgecolor='r',facecolor='none')
                         ax.add_patch(rect)
                         stump_base+=[[(xyxy[0]+xyxy[2])/2,xyxy[3]],]
-        self.display_image(fig)
+        self.pro_frame.emit(fig)
         global user_validation  
         user_validation=False
         if len(stump_base)!=0:
-                self.ques_label.setText("If the stump is detected press yes else no, \n Note:Only one stump set should be there and detected")
-                self.yes_button.show()
-                self.no_button.show()
-                self.await_event()
+                self.mutex.lock()
+                self.received_inp=False
+                self.request_input.emit("If the stump is detected press yes else no, \n Note:Only one stump set should be there and detected")
+                
+                self.wait_condition.wait(self.mutex)
+                self.mutex.unlock()
         else:
-             self.user_inp=False
+             self.inp=False
         #user_validation=input('Enter 0 for no and 1 for yes : ')
         #user_validation=1
     
@@ -207,7 +66,7 @@ class MainWindow(QMainWindow):
         '''
         Generating D-Map to get 3D from 2D images
         '''
-        user_validation=self.user_inp
+        user_validation=self.inp
         if user_validation:
                 #loading dpt transforms 
                 print("---inside d_map gen 2",frame.shape)    
@@ -293,11 +152,12 @@ class MainWindow(QMainWindow):
             ret,frame=cap.read()
             frame=cv2.flip(frame,0) if orientation=='right' else frame
             frame_id+=1
-            frame=np.transpose(frame,(1,0,2))
-            print(frame.shape)
+            
         
             if not ret:
                 break
+            frame=np.transpose(frame,(1,0,2))
+            print(frame.shape)
 
             '''
             Image padding to avoid using DPT transforms that changes the image's aspect ratio
@@ -374,7 +234,7 @@ class MainWindow(QMainWindow):
                         ball_props=ball_props._append(df,ignore_index=True)
                 
                 #plt.show()
-                self.display_image(fig) 
+                self.pro_frame.emit(fig)
             
                 
                 if len(ball_props)!=0:
@@ -452,18 +312,13 @@ class MainWindow(QMainWindow):
         cap.release()
         cv2.destroyAllWindows()
         return player_posture,ball_props
-     
-
     
-    
-    
-            
+    def user_response(self,inp):
+         self.mutex.lock()
+         self.received_inp=True
+         self.inp=inp
+         self.wait_condition.wakeAll()
+         self.mutex.unlock()
 
-def main():
-    app=QApplication(sys.argv)
-    window=MainWindow()
-    window.show()
-    sys.exit(app.exec_())
-
-if __name__=="__main__":
-    main()
+    def stop(self):
+        self.isRunning_=False
