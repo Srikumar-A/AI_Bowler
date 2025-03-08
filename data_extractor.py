@@ -12,40 +12,6 @@ def get_batsman_depth(data_df):
     batDepth/=len(data_df)
     return batDepth
 
-def get_reward(ballVectorAtDepth):
-    '''Setting reward system:
-    things to consider
-    1. Wide ball - (-500 pts)
-    2. No ball(throwing to the batsman's head) (-999 pts)
-    3. batsman hitting the ball(a major deflection only considered)(-100 pts) - manual(sensor gave us away)
-    4. +100 if the batsman misses it.
-
-    Change this based on performance of the models and experimentation.
-    This block of code finds the trend of the ball vector to analyze and get pitching length
-    '''
-    # wide x axis thresholds
-    wideXThresh_off=50
-    wideXThresh_leg=250
-    wideYThresh=168
-    noballYThresh=250
-
-    reward=0
-
-    if ballVectorAtDepth[1]<=noballYThresh:
-        print("No Ball")
-        reward-=999
-    elif ballVectorAtDepth[0]<=wideXThresh_off or ballVectorAtDepth[0]>=wideXThresh_leg:
-        reward-=500
-    '''
-    Manual labelling part
-    The outcome of the event previously sensor's duty, has been sized down to manual entry- sensor device wasnt stable.
-    '''
-    outcome=int(input("Enter 1 if the batsman hit the ball convincingly else 0:"))
-    if outcome==1:
-        reward-=100
-    else:
-        reward+=100
-    return reward
     
 
 def ball_state(player_posture,ball_props,frame_rate=60):
@@ -141,6 +107,6 @@ def ball_state(player_posture,ball_props,frame_rate=60):
 
    
     #get rewards 
-    reward=get_reward(ballVectorAtDepth)
-    return length,line,velocity,reward,ball_props
+    #reward=get_reward(ballVectorAtDepth)
+    return length,line,velocity,ballVectorAtDepth,ball_props
 

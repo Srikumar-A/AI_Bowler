@@ -7,13 +7,19 @@ from ultralytics import YOLO
 import matplotlib.pyplot as plt
 from data_extractor import ball_state
 import matplotlib.patches as patches
-from io import BytesIO
-from PySide2.QtCore import QEventLoop
 from PyQt5.QtCore import QThread,pyqtSignal,QMutex,QWaitCondition
+import json
+from Agent import AIBowler
+from RLEnv import CricketEnv
+import tensorflow as tf
+import os
 
 class VideoProcessor(QThread):
     pro_frame=pyqtSignal(object)
     request_input=pyqtSignal(str)
+    processing_flag=pyqtSignal(str)
+    preds=pyqtSignal(dict)
+    end_signal=pyqtSignal()
 
     def __init__(self,file_path):
         super().__init__()
@@ -23,13 +29,145 @@ class VideoProcessor(QThread):
         self.isRunning_=True
         self.recieved_inp=False
         self.inp=False
+        self.raw_dataset=pd.read_csv(r'dataset.csv')
+        self.dataset=self.raw_dataset
+        self.dataset_processor()
+        # initialize model and environment
+        self.env=CricketEnv(self.dataset,valid_dataset=self.dataset)
+        self.Agent_B=AIBowler(env=self.env)
+        if os.path.isdir(self.Agent_B.actor.chkpt_dir):
+              self.Agent_B.load_models()
+    def get_reward(self,ballVectorAtDepth):
+        '''Setting reward system:
+        things to consider
+        1. Wide ball - (-500 pts)
+        2. No ball(throwing to the batsman's head) (-999 pts)
+        3. batsman hitting the ball(a major deflection only considered)(-100 pts) - manual(sensor gave us away)
+        4. +100 if the batsman misses it.
 
+            Change this based on performance of the models and experimentation.
+                This block of code finds the trend of the ball vector to analyze and get pitching length
+        '''
+        # wide x axis thresholds
+        wideXThresh_off=50
+        wideXThresh_leg=250
+        wideYThresh=168
+        noballYThresh=250
+
+        reward=0
+
+        if ballVectorAtDepth[1]<=noballYThresh:
+                print("No Ball")
+                reward-=999
+        elif ballVectorAtDepth[0]<=wideXThresh_off or ballVectorAtDepth[0]>=wideXThresh_leg:
+                reward-=500
+        '''
+        Manual labelling part
+        The outcome of the event previously sensor's duty, has been sized down to manual entry- sensor device wasnt stable.
+        '''
+        outcome=False
+        self.mutex.lock()
+        self.received_inp=False
+        self.request_input.emit("Did the batsman hit the ball convincingly")
+                
+        self.wait_condition.wait(self.mutex)
+        self.mutex.unlock()
+        outcome=self.inp
+        if outcome:
+                reward-=100
+        else:
+                reward+=100
+        return reward    
+    
+    def PoseToState(self,player_pos):
+        state_instance=[]
+        for i in range(len(player_pos)):
+              state_timestamp=[]
+              for k in player_pos.columns:
+                    state_timestamp+=player_pos.loc[i,k]
+              state_instance+=[state_timestamp]
+        print(np.array(state_instance),np.array(state_instance).shape)
+        return [np.array(state_instance)]
+    def dataset_processor(self):
+        state=[]
+        for i in range(len(self.raw_dataset)):
+                data=json.loads(self.raw_dataset.player_posture[i])
+                state_ex=[]
+                for i in range(len(data["ball_vector"])):
+                      state_timestep=[]
+                      for k in data.keys():
+                            state_timestep+=data[k][str(i)]
+                      state_ex+=[state_timestep]
+                state+=[np.array([state_ex])]
+        
+        #adding the columns to processed dataset
+        self.dataset["state"]=state
+          
     def run(self):
-        self.posture_ball_det(self.file_path)
+        self.processing_flag.emit("Extracting Features")
+        player_pos,ball_props=self.posture_ball_det(self.file_path)
+        self.processing_flag.emit("Processing extracted features")
+        length,line,velocity,ball_vector,ball_params=ball_state(player_pos,ball_props)
+        player_pos=pd.merge(ball_params.drop(['del_x','del_y','del_z','del_frame','velocity'],axis=1),player_pos,on='frame_id')
+        player_pos=player_pos.drop(['frame_id'],axis=1)
+        reward=self.get_reward(ball_vector)
+
+        # further processing of data to find whether some value is none
+        state=self.PoseToState(player_pos)
+        if velocity is None or velocity<60:
+              velocity=60
+        elif velocity>130:
+              velocity=130
+        # if none just say the video is not processable(reboot the application)
+        if state is not None and length is not None and line is not None:
+              # add it to dataset dataframe
+              self.dataset._append({
+                    'length':length,
+                    'line':line,
+                    'velocity':velocity,
+                    'reward':reward,
+                    'state':state
+                    
+              },ignore_index=True)
+              # add the new instance to the csv dataset
+              self.raw_dataset._append({
+                    'player_posture':player_pos.to_json(),
+                    'length':length,
+                    'line':line,
+                    'velocity':velocity,
+                    'reward':reward
+              },ignore_index=True)
+              self.raw_dataset.to_csv(r'dataset.csv')
+
+              #train RL algorithm and get the output
+              self.processing_flag.emit("Predicting action")
+              action=self.Agent_B.choose_action(state,evaluate=True)
+              action=tf.squeeze(action)
+              #return output to the frontend
+              self.processing_flag.emit("Next step of action predicted")
+              self.preds.emit({
+                    'line':action[0].numpy(),
+                    'length':action[1].numpy(),
+                    'velocity':action[2].numpy()
+              })
+              #learn
+              new_state,_,done,info=self.env.step(action)
+              self.Agent_B.remember(state,action,reward,new_state,done)
+              #self.processing_flag.emit("Updating the agent")
+              self.Agent_B.learn()
+              
+              
+              
+              
+        else:
+              self.request_input.emit("The video cannot be processed as the line and length cannot be made out of the video.")
+
+        self.end_signal.emit()
+
 
 
     def d_map_generator(self,frame,MiDaS,device):
-        stump_detector=YOLO(r'E:\stump_detector.pt')
+        stump_detector=YOLO(r'detection_model\stump_detector.pt')
         #Detect the stump
         stump_preds=stump_detector(frame)
         # show the detection to the user for validation
@@ -183,10 +321,8 @@ class VideoProcessor(QThread):
                 borderType=cv2.BORDER_CONSTANT,
                 value=[0, 0, 0],  # Black padding
             )  
-            if not (d_map_flag):  
-                print("------------------------",frame.shape)    
-                d_map,d_map_flag,stump_base=self.d_map_generator(padded_image,MiDaS,device)
-            print(d_map_flag)    
+            if not (d_map_flag):     
+                d_map,d_map_flag,stump_base=self.d_map_generator(padded_image,MiDaS,device)   
             # get in the stump detector code and make sure once the stump is detected, the code should not get into the stump detector part again.
             if d_map_flag:
                 
@@ -195,7 +331,7 @@ class VideoProcessor(QThread):
                 The model has been developed using yolov8s image augmentation and planning to use hyperparameters tuning.
                 '''
                 
-                ball_det_model=YOLO(r"C:\Users\sp arivalagan\Downloads\ball_detector_aug.pt")
+                ball_det_model=YOLO(r'detection_model\ball_detector_aug.pt')
                 ball_preds=ball_det_model(frame)
 
                 '''
