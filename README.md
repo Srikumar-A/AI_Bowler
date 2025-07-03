@@ -51,6 +51,7 @@ Environment Simulation (if virtual testbed used): Custom cricket simulation setu
 ________________________________________________________________
 _________________________________________________________________
 ## Dependencies
+Download the requirements specified in the requirements.txt file which includes mediapipe, opencv, ultralytics, tensorflow, pandas and numpy to name a few.
 ________________________________________________________________
 ## License
 _________________________________________________________________
